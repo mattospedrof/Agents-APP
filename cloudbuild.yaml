@@ -2,7 +2,7 @@ substitutions:
   _SERVICE_NAME: chat-backend
   _REGION: southamerica-east1
   _REPOSITORY: chat-backend
-  _CORS_ALLOWED_ORIGINS: ""
+  _CORS_ALLOWED_ORIGINS: "https://fa-chat.vercel.app"
   _RATE_LIMIT_CHAT_PER_MINUTE: "10"
   _RATE_LIMIT_GLOBAL_PER_MINUTE: "60"
   _RATE_LIMIT_BLOCK_SECONDS: "300"
