@@ -9,6 +9,9 @@ substitutions:
   _MAX_REQUEST_BODY_BYTES: "1048576"
   _MAX_MESSAGE_CHARS: "12000"
 
+options:
+  logging: CLOUD_LOGGING_ONLY
+
 steps:
   - name: gcr.io/cloud-builders/docker
     args:
