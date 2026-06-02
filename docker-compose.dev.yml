@@ -1,0 +1,27 @@
+version: "3.9"
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    env_file:
+      - ./backend/confs/.env
+    ports:
+      - "8080:8080"
+    environment:
+      - SPRING_PROFILES_ACTIVE=${SPRING_PROFILES_ACTIVE:-local}
+    depends_on: []
+
+  frontend:
+    image: node:22-alpine
+    working_dir: /app
+    volumes:
+      - ./frontend-next/my-app:/app
+    env_file:
+      - ./frontend-next/my-app/.env.local
+    command: sh -c "npm ci && npm run dev"
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend

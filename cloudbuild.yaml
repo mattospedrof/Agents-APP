@@ -1,0 +1,49 @@
+substitutions:
+  _SERVICE_NAME: chat-backend
+  _REGION: us-central1
+  _REPOSITORY: chat-backend
+  _DATABASE_URL: ""
+  _DATABASE_USERNAME: ""
+  _CORS_ALLOWED_ORIGINS: ""
+  _RATE_LIMIT_CHAT_PER_MINUTE: "10"
+  _RATE_LIMIT_GLOBAL_PER_MINUTE: "60"
+  _RATE_LIMIT_BLOCK_SECONDS: "300"
+  _MAX_REQUEST_BODY_BYTES: "1048576"
+  _MAX_MESSAGE_CHARS: "12000"
+
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -f
+      - backend/Dockerfile
+      - -t
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_SERVICE_NAME}:$COMMIT_SHA
+      - backend
+
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - push
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_SERVICE_NAME}:$COMMIT_SHA
+
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - ${_SERVICE_NAME}
+      - --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_SERVICE_NAME}:$COMMIT_SHA
+      - --region=${_REGION}
+      - --platform=managed
+      - --allow-unauthenticated
+      - --cpu=1
+      - --memory=1Gi
+      - --min-instances=0
+      - --max-instances=2
+      - --concurrency=20
+      - --timeout=120
+      - --set-env-vars=^|^ENVIRONMENT=production|RATE_LIMIT_ENABLED=true|RATE_LIMIT_CHAT_PER_MINUTE=${_RATE_LIMIT_CHAT_PER_MINUTE}|RATE_LIMIT_GLOBAL_PER_MINUTE=${_RATE_LIMIT_GLOBAL_PER_MINUTE}|RATE_LIMIT_BLOCK_SECONDS=${_RATE_LIMIT_BLOCK_SECONDS}|MAX_REQUEST_BODY_BYTES=${_MAX_REQUEST_BODY_BYTES}|MAX_MESSAGE_CHARS=${_MAX_MESSAGE_CHARS}|DATABASE_URL=${_DATABASE_URL}|DATABASE_USERNAME=${_DATABASE_USERNAME}|CORS_ALLOWED_ORIGINS=${_CORS_ALLOWED_ORIGINS}|SPRING_JPA_HIBERNATE_DDL_AUTO=validate
+      - --set-secrets=OPENROUTER_API_KEY=OPENROUTER_API_KEY:latest,DATABASE_PASSWORD=DATABASE_PASSWORD:latest,INTERNAL_API_SECRET=INTERNAL_API_SECRET:latest
+
+images:
+  - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_SERVICE_NAME}:$COMMIT_SHA

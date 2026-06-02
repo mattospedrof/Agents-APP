@@ -1,0 +1,122 @@
+@import "tailwindcss";
+
+:root {
+  --background: #050816;
+  --foreground: #eef2ff;
+  --panel: rgba(8, 15, 33, 0.78);
+  --panel-strong: rgba(11, 19, 40, 0.96);
+  --panel-border: rgba(155, 178, 255, 0.16);
+  --accent: #6ea8fe;
+  --accent-strong: #3b82f6;
+  --accent-warm: #f59e0b;
+  --success: #22c55e;
+  color-scheme: dark;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: "Aptos", "Segoe UI", "Trebuchet MS", sans-serif;
+  --font-mono: "Cascadia Code", "Fira Code", "Consolas", monospace;
+}
+
+html,
+body {
+  height: 100%;
+  background-color: #030712;
+  color: #e5e7eb;
+  color-scheme: dark;
+}
+
+body {
+  background:
+    radial-gradient(1100px 640px at 82% -18%, rgba(14, 165, 233, 0.08), transparent 72%),
+    radial-gradient(880px 540px at 8% 92%, rgba(37, 99, 235, 0.09), transparent 72%),
+    #030712;
+  color: var(--foreground);
+  font-family: var(--font-sans);
+  overflow-x: hidden;
+}
+
+body::before {
+  content: none;
+}
+
+button {
+  cursor: pointer;
+}
+
+input,
+textarea,
+select,
+button {
+  color-scheme: dark;
+}
+
+input,
+textarea,
+select {
+  color: #e5e7eb;
+  background-color: transparent;
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: #64748b;
+  opacity: 1;
+}
+
+.app-shell-bg {
+  background:
+    radial-gradient(1100px 600px at 78% -22%, rgba(56, 189, 248, 0.08), transparent 70%),
+    radial-gradient(900px 520px at 4% 96%, rgba(29, 78, 216, 0.1), transparent 72%),
+    #030712;
+}
+
+::selection {
+  background: rgba(110, 168, 254, 0.28);
+}
+
+.copy-success {
+  animation: copyFlash 0.45s ease;
+}
+
+.scroll-shell::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.scroll-shell::-webkit-scrollbar-track {
+  background: rgba(15, 23, 42, 0.35);
+  border-radius: 999px;
+}
+
+.scroll-shell::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.36);
+  border-radius: 999px;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+}
+
+.scroll-shell::-webkit-scrollbar-thumb:hover {
+  background: rgba(125, 211, 252, 0.45);
+}
+
+.scroll-shell {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(148, 163, 184, 0.36) rgba(15, 23, 42, 0.35);
+}
+
+@keyframes copyFlash {
+  0% {
+    transform: translateY(0) scale(1);
+    box-shadow: 0 0 0 rgba(34, 197, 94, 0);
+  }
+  50% {
+    transform: translateY(-1px) scale(1.02);
+    box-shadow: 0 0 0.8rem rgba(34, 197, 94, 0.45);
+  }
+  100% {
+    transform: translateY(0) scale(1);
+    box-shadow: 0 0 0 rgba(34, 197, 94, 0);
+  }
+}
