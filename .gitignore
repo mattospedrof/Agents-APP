@@ -12,8 +12,6 @@ frontend-next/my-app/node_modules
 # testing
 /coverage
 **/coverage/
-backend/run-local.ps1
-docs
 
 # next.js
 /.next/
