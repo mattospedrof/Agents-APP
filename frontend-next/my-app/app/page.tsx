@@ -107,6 +107,12 @@ type AssistantDocumentValidation = {
 const LONG_USER_MESSAGE_CHARS = 800;
 const LONG_USER_MESSAGE_LINES = 10;
 const LONG_USER_MESSAGE_PREVIEW_CHARS = 500;
+const BUILD_APP_VERSION = process.env.NEXT_PUBLIC_APP_VERSION;
+
+function displayVersion(version?: string | null) {
+  const normalized = (version ?? "").trim().replace(/^v/i, "");
+  return normalized ? `v${normalized}` : "v0.0.0";
+}
 
 function uniqueModelList(models: string[]) {
   return Array.from(new Set(models.filter(Boolean)));
@@ -1722,6 +1728,7 @@ export default function Home() {
         : null,
     [activeConversationMenuId, sidebarConversations]
   );
+  const displayedAppVersion = displayVersion(BUILD_APP_VERSION ?? config?.version);
 
   useEffect(() => {
     async function bootstrap() {
@@ -2872,7 +2879,7 @@ export default function Home() {
                 </button>
               </div>
               <p className="mb-7 text-left text-xs text-slate-400">
-                Multi-agent chat v{config?.version ?? "0.2.0"}
+                Multi-agent chat {displayedAppVersion}
               </p>
 
               <div className="scroll-shell flex-1 overflow-y-auto pr-1">
