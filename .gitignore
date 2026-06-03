@@ -45,14 +45,13 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env
-.env*
 .env.local
 .env.production
 *.env
 backend/confs/.env
 backend/confs/*.env
 frontend-next/my-app/.env.local
-frontend-next/my-app/.env.production
+
 # secret files
 backend/src/main/confs/secret_google.json
 application-*.yml

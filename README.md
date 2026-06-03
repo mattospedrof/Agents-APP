@@ -30,6 +30,18 @@ Browser
 
 O frontend roda na Vercel, o backend roda no Cloud Run e as respostas dos modelos são processadas pelo backend antes de voltarem para a interface.
 
+# Rodar localmente
+Para rodar localmente o backend:
+- Crie um .env dentro de backend/confs (de acordo com .env-example)
+- Coloque valores reais
+- Dentro do terminal na pasta do backend rode ```.\run-local-back.ps1```
+
+Para rodar localmente o frontend:
+- Crie um .env.local dentro da pasta do app (de acordo com .env-example dentro dessa pasta)
+- Coloque valores reais
+- Dentro do terminal na pasta do app rode ```npm run dev```
+
+
 ## Stack
 
 ### Frontend
