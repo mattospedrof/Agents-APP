@@ -1,3 +1,5 @@
+![Status](https://img.shields.io/badge/Status-Em%20Desenvolvimento-darkblue)
+
 # FA Chat
 
 Chat multiagente com foco em respostas claras, contexto de conversa e experiência simples para uso diário.
