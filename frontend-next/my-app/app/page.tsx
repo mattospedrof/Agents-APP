@@ -15,8 +15,6 @@ import remarkGfm from "remark-gfm";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
 import { useSession, signIn, signOut } from "next-auth/react";
-import { AssistantAvatar, TypingIndicator, UserAvatar } from "@/components/chat/ChatAtoms";
-import { ModelDropdown } from "@/components/chat/ModelDropdown";
 import {
   MODEL_ROLE_SELECTION_STORAGE_KEY,
   SPEED_MODE_STORAGE_KEY,
@@ -41,37 +39,6 @@ import {
   FALLBACK_MODELS,
   FALLBACK_SELECTED_MODELS,
 } from "@/lib/model-fallbacks";
-import {
-  LONG_PASTE_ATTACHMENT_PROMPT,
-  LONG_PASTE_ATTACHED_NOTICE,
-  LONG_PASTE_CHAR_LIMIT,
-  LONG_PASTE_EXISTING_FILE_NOTICE,
-  LONG_PASTE_FILE_NAME,
-  LONG_PASTE_FILE_TYPE,
-  LONG_PASTE_MAX_BYTES,
-  LONG_PASTE_TOO_LARGE_NOTICE,
-  activeFileFromFile,
-} from "@/lib/chat/longPaste";
-import {
-  buildDefaultRoleSelection,
-  displayVersion,
-  sanitizeRoleSelection,
-  uniqueModelList,
-  type RoleModelSelection,
-} from "@/lib/chat/modelSelection";
-import {
-  chooseConversationTitle,
-  conversationPreviewFromMessages,
-  firstNameOf,
-  formatConversationDate,
-  normalizeBackendConversationTitle,
-  normalizeConversationText,
-  normalizedProvidedTitle,
-  shortLabelOf,
-  titleFromAssistantResponse,
-  titleFromUserPrompt,
-} from "@/lib/chat/title";
-import { createStreamBuffer } from "@/lib/chat/stream";
 import type { AppConfig } from "@/lib/types";
 
 type ChatRole = "user" | "assistant";
@@ -84,7 +51,6 @@ type ChatMessage = {
   attachmentSummary?: string | null;
   fileContextId?: string | null;
   document?: AssistantDocument | null;
-  isStreaming?: boolean;
   responseTrace?: {
     plannerModelId: string | null;
     executorModelId: string | null;
@@ -111,10 +77,26 @@ type LocalConversation = ConversationSummary & {
   titleLocked?: boolean;
 };
 
+type RoleModelSelection = {
+  plannerModelId: string;
+  executorModelId: string;
+  reviewerModelId: string;
+};
+
 type ConversationMenuContext = "expanded" | "collapsed";
 type ConversationMenuPosition = {
   left: number;
   top: number;
+};
+
+type ModelDropdownProps = {
+  label: string;
+  value: string;
+  options: AppConfig["availableModels"];
+  disabled?: boolean;
+  isOpen: boolean;
+  onToggle: () => void;
+  onSelect: (modelId: string) => void;
 };
 
 type AssistantDocumentValidation = {
@@ -122,18 +104,170 @@ type AssistantDocumentValidation = {
   reason: string;
 };
 
-type MessageRenderState = {
-  normalizedAssistantContent: string;
-  assistantDocument: AssistantDocument | null;
-  hasMarkdownTable: boolean;
-  isStreamingAssistant: boolean;
-  isLatestAssistant: boolean;
-};
-
 const LONG_USER_MESSAGE_CHARS = 800;
 const LONG_USER_MESSAGE_LINES = 10;
 const LONG_USER_MESSAGE_PREVIEW_CHARS = 500;
 const BUILD_APP_VERSION = process.env.NEXT_PUBLIC_APP_VERSION;
+
+function displayVersion(version?: string | null) {
+  const normalized = (version ?? "").trim().replace(/^v/i, "");
+  return normalized ? `v${normalized}` : "v0.0.0";
+}
+
+function uniqueModelList(models: string[]) {
+  return Array.from(new Set(models.filter(Boolean)));
+}
+
+function buildDefaultRoleSelection(config: AppConfig): RoleModelSelection {
+  const [firstModel] = config.availableModels;
+  const fallback = firstModel?.id ?? "";
+  const defaults = config.defaultSelectedModels;
+
+  return {
+    plannerModelId: defaults[1] ?? defaults[0] ?? fallback,
+    executorModelId: defaults[0] ?? defaults[1] ?? fallback,
+    reviewerModelId: defaults[2] ?? defaults[1] ?? defaults[0] ?? fallback,
+  };
+}
+
+function sanitizeRoleSelection(
+  raw: Partial<RoleModelSelection> | null | undefined,
+  config: AppConfig
+): RoleModelSelection {
+  const validIds = new Set(config.availableModels.map((model) => model.id));
+  const defaults = buildDefaultRoleSelection(config);
+
+  const pick = (value: string | undefined, fallback: string) =>
+    value && validIds.has(value) ? value : fallback;
+
+  return {
+    plannerModelId: pick(raw?.plannerModelId, defaults.plannerModelId),
+    executorModelId: pick(raw?.executorModelId, defaults.executorModelId),
+    reviewerModelId: pick(raw?.reviewerModelId, defaults.reviewerModelId),
+  };
+}
+
+function ModelDropdown({
+  label,
+  value,
+  options,
+  disabled = false,
+  isOpen,
+  onToggle,
+  onSelect,
+}: ModelDropdownProps) {
+  const selectedOption =
+    options.find((model) => model.id === value) ??
+    options[0] ??
+    null;
+
+  return (
+    <div className="space-y-1.5">
+      <label className="text-[11px] uppercase tracking-[0.18em] text-slate-400">
+        {label}
+      </label>
+      <div className="relative" data-model-dropdown>
+        <button
+          type="button"
+          onClick={onToggle}
+          disabled={disabled}
+          className="flex w-full items-center justify-between gap-2 rounded-lg border border-white/10 bg-[rgba(3,9,24,0.9)] px-3 py-2 text-left text-sm text-white shadow-[inset_0_0_0_1px_rgba(148,163,184,0.05)] outline-none transition duration-200 hover:border-sky-300/26 hover:bg-[rgba(7,15,36,0.95)] focus-visible:ring-2 focus-visible:ring-sky-300/35 disabled:cursor-not-allowed disabled:opacity-60"
+          aria-haspopup="listbox"
+          aria-expanded={isOpen}
+        >
+          <span className="truncate">{selectedOption?.label ?? "Selecione um modelo"}</span>
+          <svg
+            viewBox="0 0 20 20"
+            fill="none"
+            className={`h-4 w-4 shrink-0 text-slate-400 transition ${isOpen ? "rotate-180" : ""}`}
+            aria-hidden="true"
+          >
+            <path
+              d="M5 7.5L10 12.5L15 7.5"
+              stroke="currentColor"
+              strokeWidth="1.8"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
+        </button>
+
+        {isOpen && !disabled ? (
+          <div
+            role="listbox"
+            className="scroll-shell absolute z-40 mt-2 max-h-60 w-full overflow-y-auto rounded-lg border border-white/12 bg-[rgba(4,10,27,0.98)] p-1.5 shadow-[inset_0_0_0_1px_rgba(148,163,184,0.08),0_24px_48px_rgba(2,6,23,0.62)]"
+          >
+            {options.map((model) => {
+              const isSelected = model.id === value;
+              return (
+                <button
+                  key={`${label}-${model.id}`}
+                  type="button"
+                  role="option"
+                  aria-selected={isSelected}
+                  onClick={() => onSelect(model.id)}
+                  className={`w-full rounded-md px-2.5 py-2 text-left transition ${
+                    isSelected
+                      ? "border border-sky-300/30 bg-sky-400/12 text-sky-100"
+                      : "border border-transparent text-slate-200 hover:bg-white/6"
+                  }`}
+                >
+                  <p className="truncate text-sm font-medium">{model.label}</p>
+                  <p className="mt-0.5 text-[11px] leading-4 text-slate-400">
+                    {model.description}
+                  </p>
+                </button>
+              );
+            })}
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function AssistantAvatar() {
+  return (
+    <div className="flex h-11 w-11 items-center justify-center rounded-2xl border border-sky-400/20 bg-gradient-to-br from-sky-400 to-blue-600 text-sm font-bold text-white shadow-[0_0_35px_rgba(59,130,246,0.32)]">
+      AI
+    </div>
+  );
+}
+
+function UserAvatar({ label }: { label: string }) {
+  return (
+    <div className="flex h-11 w-11 items-center justify-center rounded-2xl border border-white/10 bg-white/10 text-sm font-bold text-white">
+      {label}
+    </div>
+  );
+}
+
+function TypingIndicator() {
+  return (
+    <div className="flex w-fit items-center gap-1 rounded-2xl border border-white/10 bg-[rgba(8,15,33,0.82)] px-4 py-3 shadow-xl">
+      <span className="h-2 w-2 animate-bounce rounded-full bg-slate-300 [animation-delay:-0.25s]" />
+      <span className="h-2 w-2 animate-bounce rounded-full bg-slate-300 [animation-delay:-0.1s]" />
+      <span className="h-2 w-2 animate-bounce rounded-full bg-slate-300" />
+    </div>
+  );
+}
+
+function firstNameOf(name: string) {
+  return name.trim().split(/\s+/)[0] || "você";
+}
+
+function shortLabelOf(name: string) {
+  return firstNameOf(name).slice(0, 1).toUpperCase() || "U";
+}
+
+function formatConversationDate(value: string) {
+  return new Intl.DateTimeFormat("pt-BR", {
+    day: "2-digit",
+    month: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(new Date(value));
+}
 
 function nodeToText(node: ReactNode): string {
   if (typeof node === "string" || typeof node === "number") {
@@ -170,6 +304,10 @@ function isCalloutParagraph(children: ReactNode) {
 
 function emptyAssistantText() {
   return "Não consegui gerar a resposta agora. Tente novamente em instantes.";
+}
+
+function normalizeConversationText(value: string) {
+  return value.replace(/\s+/g, " ").trim();
 }
 
 const TITLE_STOP_WORDS = new Set([
@@ -240,6 +378,217 @@ const TITLE_GREETING_PREFIX_REGEX =
 
 const TITLE_COMMAND_PREFIX_REGEX =
   /^(oi|ola|olá|e ai|e aí|bom dia|boa tarde|boa noite)?[\s,!:.-]*(me\s+)?(diga|fale|explique|explica|mostre|me explica|me fale)\b[\s,!:.-]*/i;
+
+function sanitizeTitleSourceText(source: string) {
+  const withoutGreeting = source
+    .replace(TITLE_GREETING_PREFIX_REGEX, "")
+    .trim();
+
+  const cleaned = (withoutGreeting || source)
+    .replace(TITLE_COMMAND_PREFIX_REGEX, "")
+    .replace(/^(o que (é|eh)|sobre)\b[\s,!:.-]*/i, "")
+    .replace(/\b(em\s+t[oó]picos?|resumid[oa]s?|detalhad[oa]s?|com\s+exemplos?)\b/gi, " ")
+    .replace(/\s*[-–—]\s*$/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  return cleaned || withoutGreeting || source;
+}
+
+function buildShortTitleFromText(source: string) {
+  const cleaned = sanitizeTitleSourceText(source);
+  const words = cleaned
+    .split(/\s+/)
+    .map((word) => word.replace(/^[^A-Za-z0-9À-ÿ]+|[^A-Za-z0-9À-ÿ]+$/g, ""))
+    .filter(Boolean);
+
+  if (words.length === 0) {
+    return "Nova conversa";
+  }
+
+  const meaningfulWords = words.filter((word) => {
+    const normalizedWord = word.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+    return normalizedWord.length > 1 && !TITLE_STOP_WORDS.has(normalizedWord);
+  });
+
+  const normalizeToken = (token: string) =>
+    token.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+
+  if (meaningfulWords.length === 0) {
+    return "Nova conversa";
+  }
+
+  const selectedWords = meaningfulWords.slice(0, 5);
+  const uniqueSelectedWords: string[] = [];
+  const seenTokens = new Set<string>();
+
+  for (const word of selectedWords) {
+    const key = normalizeToken(word);
+    if (!key || seenTokens.has(key)) {
+      continue;
+    }
+    seenTokens.add(key);
+    uniqueSelectedWords.push(word);
+  }
+
+  const lowercaseConnectors = new Set(["de", "da", "do", "das", "dos", "e", "em", "para", "por", "com", "sem"]);
+  const formattedWords = uniqueSelectedWords.map((word, index) => {
+    const normalizedWord = normalizeToken(word);
+    if (normalizedWord === "el") {
+      return "El";
+    }
+    if (normalizedWord === "nino" || normalizedWord === "niño") {
+      return "Niño";
+    }
+    if (index > 0 && lowercaseConnectors.has(normalizedWord)) {
+      return normalizedWord;
+    }
+    return word.charAt(0).toUpperCase() + word.slice(1).toLowerCase();
+  });
+
+  const title = formattedWords.join(" ").trim();
+  if (!title) {
+    return "Nova conversa";
+  }
+
+  const clipped = title.length > 60 ? `${title.slice(0, 57).trimEnd()}...` : title;
+  return clipped.charAt(0).toUpperCase() + clipped.slice(1);
+}
+
+function comparisonTitleFromPrompt(prompt: string) {
+  const normalized = prompt
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+
+  if (!/(compar|diferenca|diferença|versus|\bvs\b)/.test(normalized)) {
+    return "";
+  }
+
+  const cleaned = sanitizeTitleSourceText(prompt)
+    .replace(/\bem\s+uma\s+tabela(?:\s+\w+)?\b/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!cleaned) {
+    return "";
+  }
+
+  const entities = cleaned
+    .split(/[,\n;]+/)
+    .flatMap((part) => part.split(/\s+e\s+/i))
+    .map((part) => part.trim())
+    .map((part) => buildShortTitleFromText(part))
+    .filter((part) => part && part !== "Nova conversa")
+    .slice(0, 3);
+
+  const unique = Array.from(new Set(entities));
+  if (unique.length < 2) {
+    return "";
+  }
+  return unique.join(" vs ");
+}
+
+function isWeakConversationTitle(title: string) {
+  const normalized = normalizeConversationText(title);
+  if (!normalized) {
+    return true;
+  }
+
+  const words = normalized
+    .split(/\s+/)
+    .map((word) => word.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase());
+
+  const weakSingletons = new Set(["fenomeno", "assunto", "tema", "resumo", "topico", "topicos"]);
+  if (words.length === 1 && weakSingletons.has(words[0])) {
+    return true;
+  }
+
+  return false;
+}
+
+function chooseConversationTitle(candidates: Array<string | null | undefined>) {
+  for (const candidate of candidates) {
+    const normalized = normalizeConversationTitle(candidate);
+    if (!normalized) {
+      continue;
+    }
+    if (normalized.toLowerCase() === "nova conversa") {
+      continue;
+    }
+    if (isWeakConversationTitle(normalized)) {
+      continue;
+    }
+    return normalized;
+  }
+  return "Nova conversa";
+}
+
+function normalizeConversationTitle(title: string | null | undefined) {
+  const normalized = normalizeConversationText(title ?? "");
+  if (!normalized) {
+    return "";
+  }
+  return buildShortTitleFromText(normalized);
+}
+
+function normalizeBackendConversationTitle(title: string | null | undefined) {
+  const normalized = normalizeConversationText(title ?? "")
+    .replace(/^["'`]+|["'`.]+$/g, "")
+    .trim();
+  if (!normalized || normalized.toLowerCase() === "nova conversa") {
+    return "";
+  }
+  return normalized.length > 64 ? `${normalized.slice(0, 61).trimEnd()}...` : normalized;
+}
+
+function titleFromUserPrompt(prompt: string) {
+  const comparison = comparisonTitleFromPrompt(prompt);
+  if (comparison) {
+    return comparison;
+  }
+
+  const normalized = normalizeConversationText(prompt);
+  if (!normalized) {
+    return "Nova conversa";
+  }
+  return buildShortTitleFromText(normalized);
+}
+
+function normalizedProvidedTitle(title: string | null | undefined) {
+  const computed = normalizeBackendConversationTitle(title);
+  return computed === "Nova conversa" ? "" : computed;
+}
+
+function titleFromAssistantResponse(response: string) {
+  return computeShortConversationTitle(response);
+}
+
+function computeShortConversationTitle(source: string) {
+  const normalized = normalizeConversationText(source);
+  if (!normalized) {
+    return "Nova conversa";
+  }
+
+  const cleaned = normalized
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/[#>*_`|[\]{}()]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!cleaned) {
+    return "Nova conversa";
+  }
+  return buildShortTitleFromText(cleaned);
+}
+
+function conversationPreviewFromMessages(messages: ChatMessage[]) {
+  if (messages.length === 0) {
+    return "";
+  }
+
+  const latestMessage = messages[messages.length - 1];
+  const normalized = normalizeConversationText(latestMessage.content);
+  return normalized.length > 90 ? `${normalized.slice(0, 90)}...` : normalized;
+}
 
 function looksLikeMarkdownTableLine(line: string) {
   const pipeCount = line.match(/\|/g)?.length ?? 0;
@@ -794,6 +1143,18 @@ function mergeStreamChunk(previous: string, nextChunk: string) {
 }
 
 const STREAM_RENDER_INTERVAL_MS = 80;
+const LONG_PASTE_CHAR_LIMIT = 8000;
+const LONG_PASTE_MAX_BYTES = 256 * 1024;
+const LONG_PASTE_FILE_NAME = "texto-colado.txt";
+const LONG_PASTE_FILE_TYPE = "text/plain;charset=utf-8";
+const LONG_PASTE_ATTACHMENT_PROMPT = "Analise o texto anexado.";
+const LONG_PASTE_ATTACHED_NOTICE =
+  "Texto longo detectado. Transformei o conteúdo colado em arquivo para evitar travamento do input.";
+const LONG_PASTE_EXISTING_FILE_NOTICE =
+  "Você já tem um arquivo anexado. Remova o arquivo atual antes de colar outro texto longo.";
+const LONG_PASTE_TOO_LARGE_NOTICE =
+  "O texto colado ultrapassa o limite de 256 KB. Reduza o conteúdo ou envie um arquivo menor.";
+
 function markdownToClipboardText(content: string) {
   const normalized = normalizeAssistantContent(content);
   const lines = normalized.split("\n");
@@ -851,6 +1212,15 @@ function stripInlineMarkdown(content: string) {
     .replace(/_([^_\n]+)_/g, "$1")
     .replace(/<br\s*\/?>/gi, "\n")
     .trim();
+}
+
+function activeFileFromFile(file: File): ActiveFile {
+  return {
+    id: `local-${file.name}-${file.size}-${file.lastModified}`,
+    fileName: file.name,
+    contentType: file.type || "text/plain",
+    sizeBytes: file.size,
+  };
 }
 
 function assistantDocumentToClipboardText(document: AssistantDocument) {
@@ -1349,16 +1719,6 @@ export default function Home() {
   const speedMenuRef = useRef<HTMLDivElement>(null);
   const userMenuRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const activeStreamRunRef = useRef(0);
-
-  function beginStreamRun() {
-    activeStreamRunRef.current += 1;
-    return activeStreamRunRef.current;
-  }
-
-  function isActiveStreamRun(runId: number) {
-    return activeStreamRunRef.current === runId;
-  }
 
   const effectiveRoleModelSelection = useMemo<RoleModelSelection>(() => {
     if (!selectedFile) {
@@ -1670,7 +2030,6 @@ export default function Home() {
   }
 
   async function loadConversation(summary: ConversationSummary) {
-    beginStreamRun();
     if (!sessionContext) {
       const localConversation = guestConversations.find(
         (conversation) => conversation.id === summary.id
@@ -2016,25 +2375,10 @@ export default function Home() {
 
     setRestoreLoadingIndex(assistantIndex);
     setErrorText("");
-    const streamRunId = beginStreamRun();
-    setMessages([...displayContextMessages, { ...assistantMessage, content: "", document: null, isStreaming: true }]);
-    const streamBuffer = createStreamBuffer({
-      intervalMs: STREAM_RENDER_INTERVAL_MS,
-      mergeChunk: mergeStreamChunk,
-      isActive: () => isActiveStreamRun(streamRunId),
-      onFlush: (content) => {
-        setMessages([
-          ...displayContextMessages,
-          {
-            ...assistantMessage,
-            content,
-            document: null,
-            isStreaming: true,
-          },
-        ]);
-      },
-    });
+    setMessages([...displayContextMessages, { ...assistantMessage, content: "", document: null }]);
+    let streamRenderTimer: number | null = null;
     try {
+      let streamedContent = "";
       const finalPayloadRef: { payload: ChatPayloadResponse | null } = { payload: null };
 
       if (process.env.NODE_ENV !== "production") {
@@ -2064,16 +2408,32 @@ export default function Home() {
         },
         {
           onDelta: (chunk) => {
-            streamBuffer.append(chunk);
+            streamedContent = mergeStreamChunk(streamedContent, chunk);
+            if (streamRenderTimer !== null) {
+              return;
+            }
+            streamRenderTimer = window.setTimeout(() => {
+              streamRenderTimer = null;
+              setMessages([
+                ...displayContextMessages,
+                {
+                  ...assistantMessage,
+                  content: normalizeAssistantContent(streamedContent),
+                  document: null,
+                },
+              ]);
+            }, STREAM_RENDER_INTERVAL_MS);
           },
           onDone: (payload) => {
-            streamBuffer.flush();
+            if (streamRenderTimer !== null) {
+              window.clearTimeout(streamRenderTimer);
+              streamRenderTimer = null;
+            }
             finalPayloadRef.payload = payload;
           },
         }
       );
 
-      const streamedContent = streamBuffer.getContent();
       const finalAssistantContent = normalizeAssistantContent(
         finalPayloadRef.payload?.response || streamedContent || emptyAssistantText()
       );
@@ -2092,9 +2452,6 @@ export default function Home() {
         },
       };
       const nextMessages = [...displayContextMessages, refreshedAssistant];
-      if (!isActiveStreamRun(streamRunId)) {
-        return;
-      }
       setMessages(nextMessages);
       setRestoreLoadingIndex(null);
 
@@ -2110,12 +2467,12 @@ export default function Home() {
         await refreshConversations(sessionContext);
       }
     } catch {
-      if (isActiveStreamRun(streamRunId)) {
-        setMessages([...displayContextMessages, assistantMessage]);
-      }
+      setMessages([...displayContextMessages, assistantMessage]);
       setErrorText("Não foi possível refazer esta resposta agora.");
     } finally {
-      streamBuffer.cancel();
+      if (streamRenderTimer !== null) {
+        window.clearTimeout(streamRenderTimer);
+      }
       setRestoreLoadingIndex(null);
     }
   }
@@ -2150,24 +2507,9 @@ export default function Home() {
       textareaRef.current.style.height = "auto";
     }
 
-    const streamRunId = beginStreamRun();
-    const streamBuffer = createStreamBuffer({
-      intervalMs: STREAM_RENDER_INTERVAL_MS,
-      mergeChunk: mergeStreamChunk,
-      isActive: () => isActiveStreamRun(streamRunId),
-      onFlush: (content) => {
-        setMessages([
-          ...nextMessages,
-          {
-            role: "assistant",
-            content,
-            document: null,
-            isStreaming: true,
-          },
-        ]);
-      },
-    });
+    let streamRenderTimer: number | null = null;
     try {
+      let streamedContent = "";
       const finalPayloadRef: { payload: ChatPayloadResponse | null } = { payload: null };
 
       await postChatStream(
@@ -2185,16 +2527,32 @@ export default function Home() {
         },
         {
           onDelta: (chunk) => {
-            streamBuffer.append(chunk);
+            streamedContent = mergeStreamChunk(streamedContent, chunk);
+            if (streamRenderTimer !== null) {
+              return;
+            }
+            streamRenderTimer = window.setTimeout(() => {
+              streamRenderTimer = null;
+              setMessages([
+                ...nextMessages,
+                {
+                  role: "assistant",
+                  content: normalizeAssistantContent(streamedContent),
+                  document: null,
+                },
+              ]);
+            }, STREAM_RENDER_INTERVAL_MS);
           },
           onDone: (payload) => {
-            streamBuffer.flush();
+            if (streamRenderTimer !== null) {
+              window.clearTimeout(streamRenderTimer);
+              streamRenderTimer = null;
+            }
             finalPayloadRef.payload = payload;
           },
         }
       );
 
-      const streamedContent = streamBuffer.getContent();
       const finalAssistantContent = normalizeAssistantContent(
         finalPayloadRef.payload?.response || streamedContent || emptyAssistantText()
       );
@@ -2233,9 +2591,6 @@ export default function Home() {
       if (!sessionContext && nextActiveLocalFile) {
         setActiveLocalFile(nextActiveLocalFile);
       }
-      if (!isActiveStreamRun(streamRunId)) {
-        return;
-      }
       setMessages(finalMessages);
       if (!sessionContext) {
         const normalizedBackendTitle = normalizeBackendConversationTitle(finalPayloadRef.payload?.conversationTitle);
@@ -2273,16 +2628,16 @@ export default function Home() {
             `Não consegui concluir sua resposta. Tente novamente.${details ? `\n\nDetalhe técnico: ${details}` : ""}`,
         },
       ] as ChatMessage[];
-      if (isActiveStreamRun(streamRunId)) {
-        setMessages(errorMessages);
-      }
+      setMessages(errorMessages);
       if (!sessionContext && guestConversationId) {
         upsertGuestConversation(errorMessages, {
           preferredId: guestConversationId,
         });
       }
     } finally {
-      streamBuffer.cancel();
+      if (streamRenderTimer !== null) {
+        window.clearTimeout(streamRenderTimer);
+      }
       setIsLoading(false);
     }
   }
@@ -2359,7 +2714,6 @@ export default function Home() {
   }
 
   function startNewConversation() {
-    beginStreamRun();
     setConversationId(null);
     setGuestConversationId(null);
     setMessages([]);
@@ -2387,46 +2741,6 @@ export default function Home() {
     !errorText.toLowerCase().includes("conversas salvas");
   const showGlobalTyping =
     isLoading && messages[messages.length - 1]?.role !== "assistant";
-  const latestAssistantIndex = useMemo(
-    () => messages.findLastIndex((message) => message.role === "assistant"),
-    [messages]
-  );
-  const messageRenderStates = useMemo<MessageRenderState[]>(
-    () =>
-      messages.map((message, index) => {
-        const isAssistant = message.role === "assistant";
-        if (!isAssistant) {
-          return {
-            normalizedAssistantContent: "",
-            assistantDocument: null,
-            hasMarkdownTable: false,
-            isStreamingAssistant: false,
-            isLatestAssistant: false,
-          };
-        }
-
-        const isStreamingAssistant = message.isStreaming === true;
-        const normalizedAssistantContent = isStreamingAssistant
-          ? message.content
-          : normalizeAssistantContent(message.content);
-        const assistantDocument = message.document?.blocks?.length
-          ? message.document
-          : null;
-        const hasMarkdownTable =
-          !!assistantDocument?.blocks.some((block) => block.type === "table") ||
-          (!isStreamingAssistant &&
-            /(^|\n)\s*\|[^|\n]+(?:\|[^|\n]+)+\|?\s*$/m.test(normalizedAssistantContent));
-
-        return {
-          normalizedAssistantContent,
-          assistantDocument,
-          hasMarkdownTable,
-          isStreamingAssistant,
-          isLatestAssistant: latestAssistantIndex === index,
-        };
-      }),
-    [latestAssistantIndex, messages]
-  );
 
   return (
     <main className="app-shell-bg h-screen overflow-hidden text-white">
@@ -2933,14 +3247,21 @@ export default function Home() {
                   {messages.map((message, index) => {
                     const isUser = message.role === "user";
                     const isAssistant = message.role === "assistant";
-                    const renderState = messageRenderStates[index];
-                    const isStreamingAssistant = renderState?.isStreamingAssistant ?? false;
-                    const normalizedAssistantContent = renderState?.normalizedAssistantContent ?? "";
-                    const assistantDocument = renderState?.assistantDocument ?? null;
-                    const hasMarkdownTable = renderState?.hasMarkdownTable ?? false;
+                    const normalizedAssistantContent = isAssistant
+                      ? normalizeAssistantContent(message.content)
+                      : "";
+                    const assistantDocument = isAssistant && message.document?.blocks?.length
+                      ? message.document
+                      : null;
+                    const hasMarkdownTable =
+                      !!assistantDocument?.blocks.some((block) => block.type === "table") ||
+                      (isAssistant &&
+                        /(^|\n)\s*\|[^|\n]+(?:\|[^|\n]+)+\|?\s*$/m.test(normalizedAssistantContent));
                     const isRestoringAssistant =
                       isAssistant && restoreLoadingIndex === index && !message.content.trim();
-                    const isLatestAssistant = renderState?.isLatestAssistant ?? false;
+                    const isLatestAssistant =
+                      isAssistant &&
+                      messages.findLastIndex((item) => item.role === "assistant") === index;
                     const userMessageKey = `${index}-${message.content.length}-${message.content.slice(0, 24)}`;
                     const shouldCollapseUserMessage = isUser && isLongUserMessage(message.content);
                     const isUserMessageExpanded = expandedUserMessages.has(userMessageKey);
@@ -3015,11 +3336,7 @@ export default function Home() {
                                 <TypingIndicator />
                               ) : (
                                 <div className="max-w-none break-words text-sm leading-7 text-slate-200 sm:text-[15px]">
-                                  {isStreamingAssistant ? (
-                                    <p className="whitespace-pre-wrap leading-7 text-slate-200">
-                                      {normalizedAssistantContent}
-                                    </p>
-                                  ) : assistantDocument ? (
+                                  {assistantDocument ? (
                                     <AssistantDocumentRenderer
                                       document={assistantDocument}
                                       copiedBlockId={copiedBlockId}
@@ -3226,7 +3543,7 @@ export default function Home() {
                             </div>
                           )}
 
-                          {isAssistant && !isStreamingAssistant ? (
+                          {isAssistant ? (
                             <div className="mt-2 flex items-center gap-1 pl-1 text-slate-300">
                               <button
                                 type="button"
