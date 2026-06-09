@@ -35,6 +35,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Predicate;
 import java.util.regex.Pattern;
 
 @Service
@@ -172,34 +173,60 @@ public class ResponseDocumentService {
         if (tableLines.isEmpty()) {
             return;
         }
-        AssistantBlock table = toLooseTableBlock(tableLines);
-        if (table != null) {
-            blocks.add(table);
-            return;
-        }
-        if (appendPipeTableFallback(tableLines, blocks)) {
-            return;
-        }
-        List<String> fallbackItems = tableLinesToFallbackItems(tableLines);
-        if (!fallbackItems.isEmpty()) {
-            blocks.add(AssistantBlock.list("bulletList", fallbackItems));
-        }
+        appendPipeSection(tableLines, blocks);
     }
 
     private void flushHyphenTable(List<String> tableLines, List<AssistantBlock> blocks) {
         if (tableLines.isEmpty()) {
             return;
         }
-        if (appendHyphenTableFallback(tableLines, blocks)) {
+        appendHyphenSection(tableLines, blocks);
+    }
+
+    private void appendPipeSection(List<String> lines, List<AssistantBlock> blocks) {
+        AssistantBlock table = toLooseTableBlock(lines);
+        if (table != null) {
+            blocks.add(table);
             return;
         }
+        if (appendPipeTableFallback(lines, blocks)) {
+            return;
+        }
+        appendPlainLineParagraphs(lines, blocks);
+    }
 
-        for (String line : tableLines) {
-            String text = sanitizeInlineText(line);
-            if (!text.isBlank()) {
+    private void appendHyphenSection(List<String> lines, List<AssistantBlock> blocks) {
+        if (appendHyphenTableFallback(lines, blocks)) {
+            return;
+        }
+        appendPlainLineParagraphs(lines, blocks);
+    }
+
+    private void appendTrailingSection(List<String> lines, List<AssistantBlock> blocks) {
+        if (lines.isEmpty()) {
+            return;
+        }
+        appendContentSegments(String.join("\n", lines), blocks);
+    }
+
+    private void appendPlainLineParagraphs(List<String> lines, List<AssistantBlock> blocks) {
+        for (String line : lines) {
+            String text = sanitizeInlineText(line.replace('|', ' '));
+            if (!text.isBlank() && !EMPTY_TABLE_NOISE.matcher(text).matches()) {
                 blocks.add(AssistantBlock.paragraph(text));
             }
         }
+    }
+
+    private int leadingMatchingLines(List<String> lines, Predicate<String> matcher) {
+        int count = 0;
+        for (String line : lines) {
+            if (!matcher.test(line)) {
+                break;
+            }
+            count++;
+        }
+        return count;
     }
 
     private void appendBlock(Node node, List<AssistantBlock> blocks) {
@@ -267,17 +294,18 @@ public class ResponseDocumentService {
         }
 
         List<String> lines = text.lines().map(String::trim).filter(line -> !line.isBlank()).toList();
-        if (lines.stream().anyMatch(this::looksLikeLooseTableLine)) {
-            AssistantBlock table = toLooseTableBlock(lines);
-            if (table != null) {
-                blocks.add(table);
-                return;
-            }
-            List<String> fallbackItems = tableLinesToFallbackItems(lines);
-            if (!fallbackItems.isEmpty()) {
-                blocks.add(AssistantBlock.list("bulletList", fallbackItems));
-                return;
-            }
+        int pipeTablePrefixLength = leadingMatchingLines(lines, this::looksLikeLooseTableLine);
+        if (pipeTablePrefixLength >= 2) {
+            appendPipeSection(lines.subList(0, pipeTablePrefixLength), blocks);
+            appendTrailingSection(lines.subList(pipeTablePrefixLength, lines.size()), blocks);
+            return;
+        }
+
+        int hyphenTablePrefixLength = leadingMatchingLines(lines, this::looksLikeHyphenTableLine);
+        if (hyphenTablePrefixLength >= 2) {
+            appendHyphenSection(lines.subList(0, hyphenTablePrefixLength), blocks);
+            appendTrailingSection(lines.subList(hyphenTablePrefixLength, lines.size()), blocks);
+            return;
         }
 
         if (appendHyphenTableFallback(lines, blocks)) {
@@ -342,14 +370,14 @@ public class ResponseDocumentService {
         }
 
         List<String> columns = splitCells(contentLines.get(0));
-        if (columns.size() < 2) {
+        if (columns.size() < 2 || columns.stream().anyMatch(this::looksLikeHeadingLikeTableCell)) {
             return false;
         }
 
         List<String> items = new ArrayList<>();
         for (String line : contentLines.subList(1, contentLines.size())) {
             List<String> cells = splitCells(line);
-            if (cells.size() < 2) {
+            if (cells.size() < 2 || cells.stream().anyMatch(this::looksLikeHeadingLikeTableCell)) {
                 continue;
             }
 
@@ -436,7 +464,9 @@ public class ResponseDocumentService {
         }
 
         List<String> columns = cleanCells(allRows.get(0));
-        if (columns.size() < 2 || columns.stream().anyMatch(String::isBlank)) {
+        if (columns.size() < 2
+            || columns.stream().anyMatch(String::isBlank)
+            || columns.stream().anyMatch(this::looksLikeHeadingLikeTableCell)) {
             return null;
         }
 
@@ -488,26 +518,6 @@ public class ResponseDocumentService {
         }
         return TABLE_LINE.matcher(trimmed).matches() && trimmed.chars().filter(ch -> ch == '|').count() >= 2;
     }
-
-    private List<String> tableLinesToFallbackItems(List<String> lines) {
-        List<String> items = new ArrayList<>();
-        for (String line : lines) {
-            String trimmed = line.replaceFirst("^[-*•]\\s*", "").trim();
-            if (EMPTY_TABLE_NOISE.matcher(trimmed).matches()) {
-                continue;
-            }
-            if (!looksLikeLooseTableLine(trimmed)) {
-                items.add(sanitizeInlineText(trimmed));
-                continue;
-            }
-            List<String> cells = splitCells(trimmed);
-            if (cells.size() >= 2) {
-                items.add(String.join(" - ", cells));
-            }
-        }
-        return items.stream().map(this::sanitizeInlineText).filter(item -> !item.isBlank()).toList();
-    }
-
     private AssistantBlock toLooseTableBlock(List<String> lines) {
         List<String> tableLines = lines.stream()
             .filter(this::looksLikeLooseTableLine)
@@ -521,7 +531,9 @@ public class ResponseDocumentService {
         }
 
         List<String> columns = splitCells(tableLines.get(0));
-        if (columns.size() < 2 || columns.stream().anyMatch(String::isBlank)) {
+        if (columns.size() < 2
+            || columns.stream().anyMatch(String::isBlank)
+            || columns.stream().anyMatch(this::looksLikeHeadingLikeTableCell)) {
             return null;
         }
 
@@ -546,6 +558,11 @@ public class ResponseDocumentService {
             .map(this::sanitizeInlineText)
             .filter(cell -> !cell.isBlank())
             .toList();
+    }
+
+    private boolean looksLikeHeadingLikeTableCell(String value) {
+        String text = safeText(value).trim();
+        return text.matches("^#{1,6}\\s+.+");
     }
 
     private String normalizeForParsing(String content) {
@@ -713,3 +730,4 @@ public class ResponseDocumentService {
         }
     }
 }
+

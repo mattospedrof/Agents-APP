@@ -753,6 +753,10 @@ function normalizeLooseMarkdownTableBlock(blockLines: string[]) {
     return null;
   }
 
+  if (rows[0]?.some((cell) => /^#{1,6}\s+/.test(cell.trim()) || TABLE_SECTION_BREAK_REGEX.test(cell.trim()))) {
+    return null;
+  }
+
   if (rows.length >= 3) {
     const firstRow = rows[0];
     const wrappedHeaderCandidate = rows[1];
@@ -823,11 +827,11 @@ function normalizeLooseMarkdownTableBlock(blockLines: string[]) {
     return null;
   }
 
-  if (extractedTrailingLines.length === 0) {
-    return tableLines;
+  if (extractedTrailingLines.length > 0) {
+    return null;
   }
 
-  return [...tableLines, "", ...extractedTrailingLines];
+  return tableLines;
 }
 
 function fallbackLooseTableBlockToList(blockLines: string[]) {
@@ -855,6 +859,17 @@ function fallbackLooseTableBlockToList(blockLines: string[]) {
 
   const headers = rows[0];
   const dataRows = rows.slice(1).filter((row) => !row.every((cell) => /^:?-{2,}:?$/.test(cell)));
+  const plainLines = blockLines
+    .map((line) => line.replace(/\|+/g, " ").replace(/\s+/g, " ").trim())
+    .filter(Boolean);
+
+  if (
+    headers.some((header) => /^#{1,6}\s+/.test(header) || TABLE_SECTION_BREAK_REGEX.test(header))
+    || dataRows.some((row) => row.length !== headers.length)
+  ) {
+    return bulletPipeLines.length > 0 ? [...plainLines, ...bulletPipeLines] : plainLines;
+  }
+
   const listLines: string[] = [];
 
   for (const row of dataRows) {
@@ -878,9 +893,6 @@ function fallbackLooseTableBlockToList(blockLines: string[]) {
     return bulletPipeLines.length > 0 ? [...listLines, ...bulletPipeLines] : listLines;
   }
 
-  const plainLines = blockLines
-    .map((line) => line.replace(/\|+/g, " ").replace(/\s+/g, " ").trim())
-    .filter(Boolean);
   return bulletPipeLines.length > 0 ? [...plainLines, ...bulletPipeLines] : plainLines;
 }
 
@@ -1261,6 +1273,32 @@ function textLooksGlued(content: string) {
     || /\d+(?:meses|dias|anos|horas)\b/i.test(content);
 }
 
+function textLooksLikeBrokenList(content: string) {
+  return /\b\d+[.)]\s+\S[\s\S]*\b\d+[.)]\s+\S/.test(content)
+    || /(?:^|\s)[-*â€¢]\s*$/.test(content)
+    || /^\|\s*$/.test(content.trim());
+}
+
+function textLooksLikeBrokenTable(content: string) {
+  const trimmed = content.trim();
+  if (!trimmed.includes("|")) {
+    return false;
+  }
+
+  if (/^[-:|\s]+$/.test(trimmed)) {
+    return true;
+  }
+
+  const cells = trimmed
+    .replace(/^\|/, "")
+    .replace(/\|$/, "")
+    .split("|")
+    .map((cell) => cell.trim())
+    .filter(Boolean);
+
+  return cells.length < 2 || cells.some((cell) => /^#{1,6}\s+/.test(cell));
+}
+
 function validateAssistantDocument(document: AssistantDocument | null | undefined): AssistantDocumentValidation {
   if (!document?.blocks?.length) {
     return { valid: false, reason: "empty_document" };
@@ -1273,7 +1311,7 @@ function validateAssistantDocument(document: AssistantDocument | null | undefine
       if (!text) {
         return { valid: false, reason: "empty_heading" };
       }
-      if (text.length > 90 || wordCount > 12 || /[.!?]$/.test(text)) {
+      if (text.length > 90 || wordCount > 12 || /[.!?]$/.test(text) || text.includes("|")) {
         return { valid: false, reason: "paragraph_like_heading" };
       }
       if (textLooksGlued(text)) {
@@ -1328,19 +1366,51 @@ function validateAssistantDocument(document: AssistantDocument | null | undefine
   return { valid: true, reason: "ok" };
 }
 
+function documentNeedsSafeMarkdownFallback(document: AssistantDocument | null | undefined) {
+  if (!document?.blocks?.length) {
+    return false;
+  }
+
+  return document.blocks.some((block) => {
+    if (block.type === "paragraph" || block.type === "blockquote") {
+      const text = block.text?.trim() ?? "";
+      return textLooksLikeBrokenList(text) || textLooksLikeBrokenTable(text);
+    }
+
+    if (block.type === "bulletList" || block.type === "orderedList") {
+      return block.items?.some((item) => textLooksLikeBrokenList(item) || textLooksLikeBrokenTable(item)) ?? false;
+    }
+
+    if (block.type === "table") {
+      if (block.columns?.some((column) => /^#{1,6}\s+/.test(column.trim()) || textLooksGlued(column))) {
+        return true;
+      }
+      return (
+        block.rows?.some(
+          (row) =>
+            row.length !== (block.columns?.length ?? 0)
+            || row.some((cell) => textLooksLikeBrokenTable(cell) || textLooksGlued(cell))
+        ) ?? false
+      );
+    }
+
+    return false;
+  });
+}
+
 function selectRenderableAssistantDocument(
   document: AssistantDocument | null | undefined,
   fallbackContent: string,
   streamedContent: string
 ) {
   const validation = validateAssistantDocument(document);
-  if (validation.valid) {
+  if (validation.valid && !documentNeedsSafeMarkdownFallback(document)) {
     return document ?? null;
   }
 
   if (process.env.NODE_ENV !== "production" && document?.blocks?.length) {
     console.info("assistant document rejected", {
-      reason: validation.reason,
+      reason: validation.valid ? "safe_markdown_fallback" : validation.reason,
       blockCount: document.blocks.length,
       fallbackLength: fallbackContent.length,
       streamedLength: streamedContent.length,
@@ -2555,7 +2625,7 @@ export default function Home() {
         {
           role: "assistant",
           content:
-            `Não consegui concluir sua solicitação agora. Verifique o backend, o CORS e as chaves configuradas.${details ? `\n\nDetalhe técnico: ${details}` : ""}`,
+            `Não consegui concluir sua resposta. Tente novamente.${details ? `\n\nDetalhe técnico: ${details}` : ""}`,
         },
       ] as ChatMessage[];
       setMessages(errorMessages);

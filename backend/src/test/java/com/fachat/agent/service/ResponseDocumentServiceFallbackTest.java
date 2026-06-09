@@ -61,4 +61,31 @@ class ResponseDocumentServiceFallbackTest {
             .anyMatch(block -> "bulletList".equals(block.type())
                 && block.items().contains("Vestu\u00e1rio fitness: Distribuidores; Jovens; Instagram"));
     }
+
+    @Test
+    void keepsTrailingSummaryOutsideStructuredTable() {
+        AssistantDocument document = service.toDocument("""
+            | Caracter\u00edstica | Supabase | Neon | Aiven |
+            | --- | --- | --- | --- |
+            | Tipo de servi\u00e7o | PostgreSQL gerenciado | PostgreSQL serverless | Plataforma gerenciada |
+            Resumo r\u00e1pido: escolha depende do controle operacional e do ecossistema desejado.
+            """);
+
+        assertThat(document.blocks()).anyMatch(block -> "table".equals(block.type()));
+        assertThat(document.blocks())
+            .anyMatch(block -> "paragraph".equals(block.type()) && block.text().startsWith("Resumo r\u00e1pido:"));
+    }
+
+    @Test
+    void rejectsPipeTableWithHeadingInsideHeaderCell() {
+        AssistantDocument document = service.toDocument("""
+            | ## Diferen\u00e7as entre El Ni\u00f1o e La Ni\u00f1a | Aspecto | El Ni\u00f1o | La Ni\u00f1a |
+            | --- | --- | --- | --- |
+            | Padr\u00e3o oce\u00e2nico | Aquecimento an\u00f4malo | Resfriamento an\u00f4malo |
+            """);
+
+        assertThat(document.blocks()).noneMatch(block -> "table".equals(block.type()));
+        assertThat(document.blocks())
+            .anyMatch(block -> "paragraph".equals(block.type()) && block.text().contains("Diferen\u00e7as entre El Ni\u00f1o e La Ni\u00f1a"));
+    }
 }
