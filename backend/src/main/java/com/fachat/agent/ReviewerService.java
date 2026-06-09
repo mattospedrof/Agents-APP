@@ -50,7 +50,7 @@ public class ReviewerService {
         String latestUserMessage = latestUserMessage(messages);
         boolean explicitCodeRequest = isExplicitCodeRequest(latestUserMessage);
         boolean explicitConceptualRequest = isExplicitConceptualRequest(latestUserMessage) && !explicitCodeRequest;
-        boolean mustPreserveCode = mustPreserveCode(messages, draft);
+        boolean mustPreserveCode = mustPreserveCode(messages);
         boolean hasAssistantHistory = messages.stream()
             .anyMatch(message -> "assistant".equalsIgnoreCase(message.role()));
 
@@ -78,6 +78,8 @@ public class ReviewerService {
             - If code is required, do not replace it with a summary, critique or explanation-only answer.
             - If the draft is missing code even though the user explicitly asked for it, rewrite final_response to include a concrete code solution.
             - If the user asked a conceptual response, ensure final_response has no code blocks, scripts or pseudo-code.
+            - If the user asked for table, comparison or textual analysis, answer in prose/markdown; never use code to generate a table unless code was explicitly requested.
+            - If the draft contains improper code for a textual task, rewrite it as textual markdown.
             - Keep a conversational tone in Portuguese.
             - If conversation already has assistant turns: %s, do not restart with greeting like "Oi, tudo bem?". Continue from existing context.
             - If final_response includes code, ensure it also includes a short "Como usar" section.
@@ -279,10 +281,7 @@ public class ReviewerService {
         return builder.toString().trim();
     }
 
-    private boolean mustPreserveCode(List<ChatMessage> messages, String draft) {
-        if (draft.contains("```")) {
-            return true;
-        }
+    private boolean mustPreserveCode(List<ChatMessage> messages) {
         return isExplicitCodeRequest(latestUserMessage(messages));
     }
 
@@ -305,7 +304,14 @@ public class ReviewerService {
             "me mostre o codigo",
             "implemente",
             "query",
-            "sql",
+            "query sql",
+            "script sql",
+            "consulta sql",
+            "select",
+            "insert",
+            "update ",
+            "delete ",
+            "migration",
             "debug"
         ));
     }

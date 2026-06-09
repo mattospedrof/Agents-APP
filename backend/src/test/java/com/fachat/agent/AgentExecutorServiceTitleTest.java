@@ -1,6 +1,7 @@
 package com.fachat.agent;
 
 import com.fachat.agent.dto.ChatMessage;
+import com.fachat.agent.dto.PlannerOutput;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -82,6 +83,51 @@ class AgentExecutorServiceTitleTest {
 
         String title = service.keywordTitleFromMessages(messages);
         assertEquals("Docker", title);
+    }
+
+    @Test
+    void shouldNotTreatDatabaseNamesAsExplicitCodeRequest() {
+        assertFalse(service.isExplicitCodeRequestForTests("compare PostgreSQL e MySQL"));
+        assertFalse(service.isExplicitCodeRequestForTests("fa\u00e7a uma tabela entre PostgreSQL e MySQL"));
+        assertFalse(service.isExplicitCodeRequestForTests("explique SQL Server"));
+        assertFalse(service.isExplicitCodeRequestForTests("qual a diferen\u00e7a entre MySQL e PostgreSQL"));
+    }
+
+    @Test
+    void shouldTreatSqlActionsAsExplicitCodeRequest() {
+        assertTrue(service.isExplicitCodeRequestForTests("gere uma query SQL"));
+        assertTrue(service.isExplicitCodeRequestForTests("escreva um script SQL"));
+        assertTrue(service.isExplicitCodeRequestForTests("fa\u00e7a um select"));
+        assertTrue(service.isExplicitCodeRequestForTests("me d\u00ea um exemplo de c\u00f3digo Java"));
+    }
+
+    @Test
+    void shouldAvoidCodeForComparisonRequests() {
+        List<ChatMessage> messages = List.of(
+            new ChatMessage("user", "fa\u00e7a uma tabela de compara\u00e7\u00e3o entre PostgreSQL e MySQL", null, null)
+        );
+
+        assertTrue(service.shouldAvoidCodeResponseForTests(PlannerOutput.fallback("compare databases"), messages));
+        assertTrue(service.looksLikeCodeHeavyForTests("""
+            ```python
+            cabecalho = ["Crit\u00e9rio", "PostgreSQL", "MySQL"]
+            linhas = []
+            ```
+            """));
+    }
+
+    @Test
+    void shouldAllowExplicitPythonCodeRequest() {
+        List<ChatMessage> messages = List.of(
+            new ChatMessage("user", "gere um script Python para montar uma tabela", null, null)
+        );
+
+        assertFalse(service.shouldAvoidCodeResponseForTests(PlannerOutput.fallback("write script"), messages));
+        assertTrue(service.looksLikeCodeHeavyForTests("""
+            ```python
+            print("ok")
+            ```
+            """));
     }
 
 }

@@ -56,11 +56,54 @@ public class AgentExecutorService {
         String response = executionResult.content();
         String usedModel = executionResult.modelId();
 
+        ExecutorExecution guardedExecution = applyFinalResponseGuards(
+            response,
+            usedModel,
+            models,
+            codeFirstResponse,
+            avoidCodeResponse
+        );
+        response = guardedExecution.response();
+        usedModel = guardedExecution.modelId();
+
+        return new ExecutorExecution(response, usedModel);
+    }
+
+    public ExecutorExecution executeStreamWithTrace(
+        PlannerOutput plan,
+        List<ChatMessage> messages,
+        List<String> selectedModelIds,
+        ReasoningMode reasoningMode,
+        FileContextService.FileContext fileContext,
+        java.util.function.Consumer<String> onDelta
+    ) {
+        List<String> models = modelCatalog.resolvePreferredModels(selectedModelIds, fileContext.hasFile());
+        boolean codeFirstResponse = shouldReturnCodeFirstByIntent(plan, messages);
+        boolean avoidCodeResponse = shouldAvoidCodeResponseByIntent(plan, messages);
+        String prompt = buildExecutorPrompt(plan, messages, reasoningMode, fileContext, codeFirstResponse, avoidCodeResponse);
+        OpenRouterClient.ModelCallResult streamResult = client.callModelWithFallbackStreamResult(models, prompt, onDelta);
+        return applyFinalResponseGuards(
+            streamResult.content(),
+            streamResult.modelId(),
+            models,
+            codeFirstResponse,
+            avoidCodeResponse
+        );
+    }
+
+    private ExecutorExecution applyFinalResponseGuards(
+        String response,
+        String usedModel,
+        List<String> models,
+        boolean codeFirstResponse,
+        boolean avoidCodeResponse
+    ) {
         if (avoidCodeResponse && looksLikeCodeHeavy(response)) {
             String rewritePrompt = """
                 Reescreva a resposta abaixo para formato conceitual e didatico em portugues do Brasil.
                 Regras obrigatorias:
                 - Nao use blocos de codigo, pseudo-codigo, comandos ou scripts.
+                - Se o usuario pediu tabela ou comparacao, gere uma tabela markdown valida, nao codigo para montar a tabela.
                 - Preserve o tema e os fatos corretos da resposta original.
                 - Estruture com titulos curtos e listas objetivas.
                 - Seja objetivo.
@@ -92,22 +135,6 @@ public class AgentExecutorService {
         }
 
         return new ExecutorExecution(response, usedModel);
-    }
-
-    public ExecutorExecution executeStreamWithTrace(
-        PlannerOutput plan,
-        List<ChatMessage> messages,
-        List<String> selectedModelIds,
-        ReasoningMode reasoningMode,
-        FileContextService.FileContext fileContext,
-        java.util.function.Consumer<String> onDelta
-    ) {
-        List<String> models = modelCatalog.resolvePreferredModels(selectedModelIds, fileContext.hasFile());
-        boolean codeFirstResponse = shouldReturnCodeFirstByIntent(plan, messages);
-        boolean avoidCodeResponse = shouldAvoidCodeResponseByIntent(plan, messages);
-        String prompt = buildExecutorPrompt(plan, messages, reasoningMode, fileContext, codeFirstResponse, avoidCodeResponse);
-        OpenRouterClient.ModelCallResult streamResult = client.callModelWithFallbackStreamResult(models, prompt, onDelta);
-        return new ExecutorExecution(streamResult.content(), streamResult.modelId());
     }
 
     public String suggestConversationTitle(
@@ -216,6 +243,7 @@ public class AgentExecutorService {
             - Nao duplique numeracao: se comecar uma lista 1, 2, 3, mantenha a sequencia sem reiniciar desnecessariamente.
             - Markdown deve ser valido: coloque espaco apos # em titulos, mantenha cada item em sua propria linha e separe blocos com linha em branco.
             - So use tabela markdown quando realmente for comparacao tabular; fora disso, prefira listas.
+            - Se o usuario pedir tabela, comparacao ou analise textual, responda em prosa/markdown; nunca use codigo para gerar a tabela.
             - Nunca gere heading vazio como "#" ou "##" isolado.
             - Nunca misture heading e tabela na mesma linha.
             - Nunca deixe "Resumo rapido" dentro de tabela; o resumo deve vir em secao separada apos a tabela.
@@ -266,6 +294,7 @@ public class AgentExecutorService {
             - Depois entregue conteudo principal em blocos curtos e escaneaveis.
             - Se for comparacao/tabular (%s):
               - Use UMA tabela markdown valida com cabecalho claro.
+              - Nunca responda com Python, JavaScript, SQL ou outro codigo para montar a tabela, salvo pedido explicito de codigo.
               - Em comparacao de multiplos produtos, mantenha o mesmo numero de colunas em todas as linhas.
               - Nao use celulas de separador textual ("---" como conteudo de celula).
               - Nunca use "|" dentro do conteudo da celula. Para separar itens na mesma celula, use virgula, ponto e virgula ou <br>.
@@ -352,6 +381,10 @@ public class AgentExecutorService {
             return false;
         }
 
+        if (isComparisonRequest(normalized)) {
+            return true;
+        }
+
         boolean plannerSaysConcept = "explanation".equalsIgnoreCase(plan.task_type())
             || "conversation".equalsIgnoreCase(plan.task_type())
             || "GENERAL_EXECUTOR".equalsIgnoreCase(plan.executor());
@@ -385,7 +418,14 @@ public class AgentExecutorService {
             "programa",
             "algoritmo",
             "query",
-            "sql",
+            "query sql",
+            "script sql",
+            "consulta sql",
+            "select",
+            "insert",
+            "update ",
+            "delete ",
+            "migration",
             "debug",
             "corrija",
             "refatore",
@@ -443,7 +483,12 @@ public class AgentExecutorService {
             "sintomas",
             "tratamento",
             "resumo rapido",
-            "rapidamente"
+            "rapidamente",
+            "lista",
+            "topicos",
+            "tabela",
+            "comparacao",
+            "analise"
         ));
     }
 
@@ -523,6 +568,10 @@ public class AgentExecutorService {
             return false;
         }
 
+        if (looksLikeTableBuilderCode(response)) {
+            return true;
+        }
+
         return containsAny(normalized, List.of(
             "public static",
             "class ",
@@ -538,6 +587,24 @@ public class AgentExecutorService {
             "system out",
             "console log"
         ));
+    }
+
+    private boolean looksLikeTableBuilderCode(String response) {
+        String simplified = simplify(response);
+        return simplified.matches("(?s).*\\b(cabecalho|headers|linhas|rows|columns)\\b\\s*=.*")
+            || simplified.matches("(?s).*\\bdata\\s*=\\s*\\[.*");
+    }
+
+    boolean isExplicitCodeRequestForTests(String message) {
+        return isExplicitCodeRequest(normalizeForMatching(message));
+    }
+
+    boolean shouldAvoidCodeResponseForTests(PlannerOutput plan, List<ChatMessage> messages) {
+        return shouldAvoidCodeResponseByIntent(plan, messages);
+    }
+
+    boolean looksLikeCodeHeavyForTests(String response) {
+        return looksLikeCodeHeavy(response);
     }
 
     String sanitizeSuggestedConversationTitle(String raw, List<ChatMessage> messages) {

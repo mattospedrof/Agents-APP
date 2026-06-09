@@ -1143,6 +1143,8 @@ function mergeStreamChunk(previous: string, nextChunk: string) {
 }
 
 const STREAM_RENDER_INTERVAL_MS = 80;
+const CODE_HIGHLIGHT_MAX_CHARS = 8000;
+const CODE_HIGHLIGHT_MAX_LINES = 120;
 const LONG_PASTE_CHAR_LIMIT = 8000;
 const LONG_PASTE_MAX_BYTES = 256 * 1024;
 const LONG_PASTE_FILE_NAME = "texto-colado.txt";
@@ -1154,6 +1156,58 @@ const LONG_PASTE_EXISTING_FILE_NOTICE =
   "Você já tem um arquivo anexado. Remova o arquivo atual antes de colar outro texto longo.";
 const LONG_PASTE_TOO_LARGE_NOTICE =
   "O texto colado ultrapassa o limite de 256 KB. Reduza o conteúdo ou envie um arquivo menor.";
+
+function normalizedCodeLanguage(language: string | null | undefined) {
+  return (language || "text").trim().toLowerCase();
+}
+
+function codeLineCount(codeText: string) {
+  return codeText.split(/\r?\n/).length;
+}
+
+function codeLooksLikeMarkdownTableOrProse(codeText: string) {
+  const trimmed = codeText.trim();
+  if (!trimmed) {
+    return false;
+  }
+
+  const lines = trimmed.split(/\r?\n/);
+  const tableLikeLines = lines.filter((line) => /^\s*\|.*\|\s*$/.test(line)).length;
+  if (tableLikeLines >= 2) {
+    return true;
+  }
+
+  return (
+    /^#{1,6}\s+/m.test(trimmed) ||
+    /^[-*]\s+\S/m.test(trimmed) ||
+    /^\d+[.)]\s+\S/m.test(trimmed) ||
+    trimmed.split(/\s+/).length > 80
+  );
+}
+
+function codeLooksLikeGeneratedTableScript(codeText: string) {
+  const normalized = codeText.toLowerCase();
+  return (
+    /\b(cabecalho|cabeçalho|headers|linhas|rows|columns)\b/.test(normalized) &&
+    /\b(data|linhas|rows|headers|cabecalho|cabeçalho)\s*=/.test(normalized)
+  );
+}
+
+function shouldUseSyntaxHighlighter(language: string | null | undefined, codeText: string) {
+  const normalizedLanguage = normalizedCodeLanguage(language);
+  if (codeText.length > CODE_HIGHLIGHT_MAX_CHARS || codeLineCount(codeText) > CODE_HIGHLIGHT_MAX_LINES) {
+    return false;
+  }
+
+  if (
+    ["markdown", "md", "text", "txt", "texto", "plain"].includes(normalizedLanguage) &&
+    codeLooksLikeMarkdownTableOrProse(codeText)
+  ) {
+    return false;
+  }
+
+  return true;
+}
 
 function markdownToClipboardText(content: string) {
   const normalized = normalizeAssistantContent(content);
@@ -1394,6 +1448,15 @@ function documentNeedsSafeMarkdownFallback(document: AssistantDocument | null | 
       );
     }
 
+    if (block.type === "codeBlock") {
+      const codeText = block.code ?? "";
+      const language = normalizedCodeLanguage(block.language);
+      return (
+        ["python", "py", "javascript", "js", "typescript", "ts", "sql"].includes(language) &&
+        codeLooksLikeGeneratedTableScript(codeText)
+      );
+    }
+
     return false;
   });
 }
@@ -1477,6 +1540,37 @@ function InlineMarkdown({ children }: { children: string }) {
     >
       {repairGluedLabelText(children)}
     </ReactMarkdown>
+  );
+}
+
+function CodeBlockBody({ codeText, language }: { codeText: string; language: string }) {
+  if (!shouldUseSyntaxHighlighter(language, codeText)) {
+    return (
+      <pre className="m-0 max-h-[32rem] overflow-auto bg-[#020617] p-5 text-[0.86rem] leading-[1.65] text-slate-200">
+        <code>{codeText}</code>
+      </pre>
+    );
+  }
+
+  return (
+    <SyntaxHighlighter
+      PreTag="div"
+      language={language || "text"}
+      style={oneDark}
+      customStyle={{
+        margin: 0,
+        backgroundColor: "#020617",
+        padding: "1.2rem",
+        borderRadius: 0,
+        fontSize: "0.86rem",
+        lineHeight: "1.65",
+      }}
+      codeTagProps={{
+        style: { backgroundColor: "transparent" },
+      }}
+    >
+      {codeText}
+    </SyntaxHighlighter>
   );
 }
 
@@ -1628,24 +1722,7 @@ function AssistantDocumentRenderer({
                   {isCopied ? "Copiado" : "Copiar"}
                 </button>
               </div>
-              <SyntaxHighlighter
-                PreTag="div"
-                language={block.language || "text"}
-                style={oneDark}
-                customStyle={{
-                  margin: 0,
-                  backgroundColor: "#020617",
-                  padding: "1.2rem",
-                  borderRadius: 0,
-                  fontSize: "0.86rem",
-                  lineHeight: "1.65",
-                }}
-                codeTagProps={{
-                  style: { backgroundColor: "transparent" },
-                }}
-              >
-                {codeText}
-              </SyntaxHighlighter>
+              <CodeBlockBody codeText={codeText} language={block.language || "text"} />
             </div>
           );
         }
@@ -3479,7 +3556,7 @@ export default function Home() {
                                       </pre>
                                     ),
                                     code(props: MarkdownCodeProps) {
-                                      const { children, className, ...rest } = props;
+                                      const { children, className } = props;
                                       const match = /language-(\w+)/.exec(className || "");
                                       const codeText = String(children).replace(/\n$/, "");
                                       const isCopied = copiedBlockId === codeText;
@@ -3507,25 +3584,7 @@ export default function Home() {
                                               {isCopied ? "Copiado" : "Copiar"}
                                             </button>
                                           </div>
-                                          <SyntaxHighlighter
-                                            {...rest}
-                                            PreTag="div"
-                                            language={match[1]}
-                                            style={oneDark}
-                                            customStyle={{
-                                              margin: 0,
-                                              backgroundColor: "#020617",
-                                              padding: "1.2rem",
-                                              borderRadius: 0,
-                                              fontSize: "0.86rem",
-                                              lineHeight: "1.65",
-                                            }}
-                                            codeTagProps={{
-                                              style: { backgroundColor: "transparent" },
-                                            }}
-                                          >
-                                            {codeText}
-                                          </SyntaxHighlighter>
+                                          <CodeBlockBody codeText={codeText} language={match[1]} />
                                         </div>
                                       ) : (
                                         <code className="rounded-md border border-sky-300/25 bg-sky-400/16 px-1.5 py-0.5 font-mono text-[0.9em] font-medium text-sky-100">
